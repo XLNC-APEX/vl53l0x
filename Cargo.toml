@@ -13,6 +13,12 @@ edition = "2024"
 [dependencies]
 nb = "1.1"
 
-[dependencies.hal]
-version = "1.0"
-package = "embedded-hal"
+[dependencies.embedded-hal]
+version = "1.0.0"
+
+[dependencies.embedded-hal-async]
+optional = true
+version = "1.0.0"
+
+[features]
+async = ["dep:embedded-hal-async"]
