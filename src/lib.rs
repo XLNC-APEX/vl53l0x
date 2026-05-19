@@ -392,7 +392,7 @@ where
         PIN: hal::digital::Wait,
     {
         irq_pin
-            .wait_for_falling_edge()
+            .wait_for_low()
             .await
             .map_err(|_| Error::GpioError)?;
         self.clear_interrupt_status().await?;
