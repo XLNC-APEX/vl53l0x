@@ -6,9 +6,11 @@
 #![no_std]
 
 #[cfg(feature = "blocking")]
-use embedded_hal::i2c::I2c;
+extern crate embedded_hal as hal;
 #[cfg(not(feature = "blocking"))]
-use embedded_hal_async::i2c::I2c;
+extern crate embedded_hal_async as hal;
+
+use hal::i2c::I2c;
 
 const DEFAULT_ADDRESS: u8 = 0x29;
 
@@ -38,6 +40,8 @@ pub enum Error<E> {
     InvalidAddress(u8),
     /// Invalid argument (e.g., threshold values out of range or low > high).
     InvalidArgument,
+    /// Wait for edge failed. GPIO1 irq.
+    GpioError,
 }
 
 impl<E> core::convert::From<E> for Error<E> {
@@ -376,6 +380,25 @@ where
             }
             Err(e) => Err(nb::Error::Other(Error::from(e))),
         }
+    }
+
+    /// reads and returns range measurement
+    #[maybe_async::async_impl]
+    pub async fn read_range_mm<PIN>(
+        &mut self,
+        irq_pin: &mut PIN,
+    ) -> Result<u16, Error<E>>
+    where
+        PIN: hal::digital::Wait,
+    {
+        irq_pin
+            .wait_for_falling_edge()
+            .await
+            .map_err(|_| Error::GpioError)?;
+        self.clear_interrupt_status().await?;
+        self.read_16bit(Register::RESULT_RANGE_STATUS_plus_10)
+            .await
+            .map_err(Error::BusError)
     }
 
     /// readRangeContinuousMillimeters (blocking)
