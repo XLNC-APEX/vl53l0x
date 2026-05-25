@@ -147,7 +147,7 @@ where
         mut delay: DELAY,
     ) -> Result<(), Error<E>> {
         self.xshut_pin.set_high().map_err(|_| Error::GpioError)?;
-        delay.delay_ms(1250).await; // t_boot is 1.2ms max
+        delay.delay_us(1250).await; // t_boot is 1.2ms max
         Ok(())
     }
 
