@@ -59,8 +59,7 @@ where
     XshutPin: OutputPin,
 {
     /// Creates new driver with default address.
-    #[maybe_async::maybe_async]
-    pub async fn new(
+    pub fn new(
         i2c: I2C,
         irq_pin: IrqPin,
         xshut_pin: XshutPin,
@@ -68,12 +67,11 @@ where
     where
         I2C: I2c<Error = E>,
     {
-        VL53L0x::with_address(i2c, irq_pin, xshut_pin, DEFAULT_ADDRESS).await
+        VL53L0x::with_address(i2c, irq_pin, xshut_pin, DEFAULT_ADDRESS)
     }
 
     /// Creates new driver with given address.
-    #[maybe_async::maybe_async]
-    pub async fn with_address(
+    pub fn with_address(
         i2c: I2C,
         irq_pin: IrqPin,
         xshut_pin: XshutPin,
