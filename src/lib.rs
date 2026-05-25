@@ -420,10 +420,7 @@ where
 
     /// reads and returns range measurement
     #[maybe_async::async_impl]
-    pub async fn read_range_mm<PIN>(&mut self) -> Result<u16, Error<E>>
-    where
-        PIN: embedded_hal_async::digital::Wait,
-    {
+    pub async fn read_range_mm(&mut self) -> Result<u16, Error<E>> {
         self.wait_for_data().await?;
         self.read_16bit(Register::RESULT_RANGE_STATUS_plus_10)
             .await
