@@ -64,8 +64,6 @@ where
         irq_pin: IrqPin,
         xshut_pin: XshutPin,
     ) -> VL53L0x<I2C, IrqPin, XshutPin>
-    where
-        I2C: I2c<Error = E>,
     {
         VL53L0x::with_address(i2c, irq_pin, xshut_pin, DEFAULT_ADDRESS)
     }
@@ -77,8 +75,6 @@ where
         xshut_pin: XshutPin,
         address: u8,
     ) -> VL53L0x<I2C, IrqPin, XshutPin>
-    where
-        I2C: I2c<Error = E>,
     {
         VL53L0x {
             com: i2c,
