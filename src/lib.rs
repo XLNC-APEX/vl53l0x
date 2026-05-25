@@ -2,21 +2,23 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
-#![allow(dead_code)]
 #![no_std]
 
 #[cfg(feature = "blocking")]
-extern crate embedded_hal as hal;
+use embedded_hal::{delay::DelayNs, i2c::I2c};
 #[cfg(not(feature = "blocking"))]
-extern crate embedded_hal_async as hal;
+use embedded_hal_async::{delay::DelayNs, digital::Wait, i2c::I2c};
 
-use hal::i2c::I2c;
+use embedded_hal::digital::OutputPin;
 
 const DEFAULT_ADDRESS: u8 = 0x29;
 
 /// dummy
-pub struct VL53L0x<I2C: I2c> {
+pub struct VL53L0x<I2C: I2c, IrqPin: Wait, Xshut: OutputPin> {
     com: I2C,
+    irq_pin: IrqPin,
+    /// Should be initially low: in off state
+    xshut_pin: Xshut,
     /// dummy
     pub revision_id: u8,
     io_mode2v8: bool,
@@ -50,52 +52,72 @@ impl<E> core::convert::From<E> for Error<E> {
     }
 }
 
-impl<I2C, E> VL53L0x<I2C>
+impl<I2C, E, IrqPin, XshutPin> VL53L0x<I2C, IrqPin, XshutPin>
 where
     I2C: I2c<Error = E>,
+    IrqPin: Wait,
+    XshutPin: OutputPin,
 {
     /// Creates new driver with default address.
     #[maybe_async::maybe_async]
-    pub async fn new(i2c: I2C) -> Result<VL53L0x<I2C>, Error<E>>
+    pub async fn new(
+        i2c: I2C,
+        irq_pin: IrqPin,
+        xshut_pin: XshutPin,
+    ) -> VL53L0x<I2C, IrqPin, XshutPin>
     where
         I2C: I2c<Error = E>,
     {
-        VL53L0x::with_address(i2c, DEFAULT_ADDRESS).await
+        VL53L0x::with_address(i2c, irq_pin, xshut_pin, DEFAULT_ADDRESS).await
     }
 
     /// Creates new driver with given address.
     #[maybe_async::maybe_async]
     pub async fn with_address(
         i2c: I2C,
+        irq_pin: IrqPin,
+        xshut_pin: XshutPin,
         address: u8,
-    ) -> Result<VL53L0x<I2C>, Error<E>>
+    ) -> VL53L0x<I2C, IrqPin, XshutPin>
     where
         I2C: I2c<Error = E>,
     {
-        let mut chip = VL53L0x {
+        VL53L0x {
             com: i2c,
+            irq_pin,
+            xshut_pin,
             revision_id: 0x00,
             io_mode2v8: true,
             stop_variable: 0,
             measurement_timing_budget_microseconds: 0,
             address,
-        };
-
-        let wai = chip.who_am_i().await?;
-        if wai == 0xEE {
-            chip.init_hardware().await?;
-            // FIXME: return an error/optional
-            /*
-            chip.set_high_i2c_voltage(); // TODO: make configurable
-            chip.revision_id = chip.read_revision_id();
-            chip.reset();
-            chip.set_high_i2c_voltage();
-            chip.set_standard_i2c_mode(); // TODO: make configurable
-             */
-            Ok(chip)
-        } else {
-            Err(Error::InvalidDevice(wai))
         }
+    }
+    /// Turns on, checks whoami, inits hardware
+    #[maybe_async::maybe_async]
+    pub async fn init<DELAY: DelayNs>(
+        mut self,
+        delay: DELAY,
+    ) -> Result<Self, Error<E>> {
+        self.power_on(delay).await?;
+        let wai = self.who_am_i().await?;
+        if wai == 0xEE {
+            self.init_hardware().await?;
+        }
+        Ok(self)
+    }
+
+    // TODO: refactor
+    /// Initializes and sets new address. Calls init(), set_address()
+    #[maybe_async::maybe_async]
+    pub async fn init_with_address<DELAY: DelayNs>(
+        self,
+        address: u8,
+        delay: DELAY,
+    ) -> Result<Self, Error<E>> {
+        let mut self1 = self.init(delay).await?;
+        self1.set_address(address).await?;
+        Ok(self1)
     }
 
     /// Changes the I2C address of the sensor.
@@ -121,9 +143,13 @@ where
         Ok(())
     }
 
-    fn power_on(&mut self) -> Result<(), E> {
-        // TODO use pin to poweron
-        // XXX: not-needed?
+    #[maybe_async::maybe_async]
+    async fn power_on<DELAY: DelayNs>(
+        &mut self,
+        mut delay: DELAY,
+    ) -> Result<(), Error<E>> {
+        self.xshut_pin.set_high().map_err(|_| Error::GpioError)?;
+        delay.delay_ms(1250).await; // t_boot is 1.2ms max
         Ok(())
     }
 
@@ -382,20 +408,25 @@ where
         }
     }
 
-    /// reads and returns range measurement
+    // TODO: sync impl?
     #[maybe_async::async_impl]
-    pub async fn read_range_mm<PIN>(
-        &mut self,
-        irq_pin: &mut PIN,
-    ) -> Result<u16, Error<E>>
-    where
-        PIN: hal::digital::Wait,
-    {
-        irq_pin
+    async fn wait_for_data(&mut self) -> Result<(), Error<E>> {
+        self.irq_pin
             .wait_for_low()
             .await
             .map_err(|_| Error::GpioError)?;
-        self.clear_interrupt_status().await?;
+        self.clear_interrupt_status()
+            .await
+            .map_err(|e| Error::BusError(e))
+    }
+
+    /// reads and returns range measurement
+    #[maybe_async::async_impl]
+    pub async fn read_range_mm<PIN>(&mut self) -> Result<u16, Error<E>>
+    where
+        PIN: embedded_hal_async::digital::Wait,
+    {
+        self.wait_for_data().await?;
         self.read_16bit(Register::RESULT_RANGE_STATUS_plus_10)
             .await
             .map_err(Error::BusError)
@@ -483,9 +514,6 @@ where
 
     #[maybe_async::maybe_async]
     async fn init_hardware(&mut self) -> Result<(), Error<E>> {
-        // Enable the sensor
-
-        self.power_on()?;
         // VL53L0X_DataInit() begin
 
         // Sensor uses 1V8 mode for I/O by default; switch to 2V8 mode if necessary
@@ -1098,6 +1126,7 @@ struct SeqStepEnables {
     final_range: bool,
 }
 
+#[allow(dead_code)]
 struct SeqStepTimeouts {
     pre_range_vcselperiod_pclks: u8,
     final_range_vcsel_period_pclks: u8,
@@ -1160,11 +1189,13 @@ fn decode_vcsel_period(register_value: u8) -> u8 {
     ((register_value) + 1) << 1
 }
 
+#[allow(dead_code)]
 // Encode VCSEL pulse period register value from period in PCLKs based on VL53L0X_encode_vcsel_period()
 fn encode_vcsel_period(period_pclks: u8) -> u8 {
     ((period_pclks) >> 1) - 1
 }
 
+#[allow(dead_code)]
 #[allow(non_camel_case_types)]
 enum Register {
     SYSRANGE_START = 0x00,
